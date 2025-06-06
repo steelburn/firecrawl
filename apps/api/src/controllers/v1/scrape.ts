@@ -1,5 +1,5 @@
 import { Response } from "express";
-import { logger } from "../../lib/logger";
+import { logger as _logger } from "../../lib/logger";
 import {
   Document,
   RequestWithAuth,
@@ -21,12 +21,18 @@ export async function scrapeController(
 ) {
   const jobId = uuidv4();
   const preNormalizedBody = { ...req.body };
+  const logger = _logger.child({
+    method: "scrapeController",
+    jobId,
+    scrapeId: jobId,
+    teamId: req.auth.team_id,
+    team_id: req.auth.team_id,
+  });
  
   logger.debug("Scrape " + jobId + " starting", {
     scrapeId: jobId,
     request: req.body,
     originalRequest: preNormalizedBody,
-    teamId: req.auth.team_id,
     account: req.account,
   });
 
@@ -40,7 +46,6 @@ export async function scrapeController(
     team_id: req.auth.team_id,
     basePriority: 10,
   });
-  // 
 
   const isDirectToBullMQ = process.env.SEARCH_PREVIEW_TOKEN !== undefined && process.env.SEARCH_PREVIEW_TOKEN === req.body.__searchPreviewToken;
   
@@ -57,7 +62,8 @@ export async function scrapeController(
         useCache: req.body.__experimental_cache ? true : false,
         bypassBilling: isDirectToBullMQ,
       },
-      origin: req.body.origin,
+      origin,
+      integration: req.body.integration,
       startTime,
     },
     {},
@@ -77,9 +83,7 @@ export async function scrapeController(
   try {
     doc = await waitForJob(jobId, timeout + totalWait);
   } catch (e) {
-    logger.error(`Error in scrapeController: ${e}`, {
-      jobId,
-      scrapeId: jobId,
+    logger.error(`Error in scrapeController`, {
       startTime,
     });
     
@@ -90,9 +94,7 @@ export async function scrapeController(
         // @Nick this is a hack pushed at 2AM pls help - mogery
         const job = await supabaseGetJobById(jobId);
         if (!job?.cost_tracking) {
-          logger.warn("No cost tracking found for job", {
-            jobId,
-          });
+          logger.warn("No cost tracking found for job");
         }
         creditsToBeBilled = Math.ceil((job?.cost_tracking?.totalCost ?? 1) * 1800);
       } else {
@@ -128,13 +130,12 @@ export async function scrapeController(
   }
 
   await getScrapeQueue().remove(jobId);
-
+  
   if (!req.body.formats.includes("rawHtml")) {
     if (doc && doc.rawHtml) {
       delete doc.rawHtml;
     }
   }
-
 
   return res.status(200).json({
     success: true,

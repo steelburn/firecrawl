@@ -191,7 +191,7 @@ export const engineOptions: {
       skipTlsVerification: true,
       useFastMode: true,
       stealthProxy: false,
-      disableAdblock: false,
+      disableAdblock: true,
     },
     quality: 999, // index should always be tried second ? - MG
   },
@@ -464,15 +464,6 @@ export function buildFallbackList(meta: Meta): {
     )
     && meta.options.proxy !== "stealth";
   
-  meta.logger.warn("shouldUseIndex", {
-    shouldUseIndex,
-    formatsNoChangeTracking: !meta.options.formats.includes("changeTracking"),
-    maxAge: meta.options.maxAge !== 0,
-    headers: meta.options.headers === undefined || Object.keys(meta.options.headers).length === 0,
-    actions: meta.options.actions === undefined || meta.options.actions.length === 0,
-    proxy: meta.options.proxy !== "stealth",
-  });
-
   if (!shouldUseIndex) {
     const indexIndex = _engines.indexOf("index");
     if (indexIndex !== -1) {

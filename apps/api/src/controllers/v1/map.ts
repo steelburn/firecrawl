@@ -302,7 +302,7 @@ export async function getMapResults({
     id,
     {
       originUrl: url,
-      visitedUrls: linksToReturn,
+      visitedUrls: linksToReturn.filter(link => link !== url),
     },
     {
       priority: 10,
@@ -390,6 +390,7 @@ export async function mapController(
     crawlerOptions: {},
     scrapeOptions: {},
     origin: req.body.origin ?? "api",
+    integration: req.body.integration,
     num_tokens: 0,
   });
 

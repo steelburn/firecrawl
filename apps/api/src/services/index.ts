@@ -1,9 +1,11 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import { logger } from "../lib/logger";
+import { logger as _logger } from "../lib/logger";
 import { configDotenv } from "dotenv";
-import { Storage } from "@google-cloud/storage";
+import { ApiError, Storage } from "@google-cloud/storage";
 import crypto from "crypto";
 import { redisEvictConnection } from "./redis";
+import type { Logger } from "winston";
+import psl from "psl";
 configDotenv();
 
 // SupabaseService class initializes the Supabase client conditionally based on environment variables.
@@ -16,7 +18,7 @@ class IndexSupabaseService {
     // Only initialize the Supabase client if both URL and Service Token are provided.
     if (!supabaseUrl || !supabaseServiceToken) {
       // Warn the user that Authentication is disabled by setting the client to null
-      logger.warn(
+      _logger.warn(
         "Index supabase client will not be initialized.",
       );
       this.client = null;
@@ -58,7 +60,7 @@ export const index_supabase_service: SupabaseClient = new Proxy(
 
 const credentials = process.env.GCS_CREDENTIALS ? JSON.parse(atob(process.env.GCS_CREDENTIALS)) : undefined;
 
-export async function getIndexFromGCS(url: string): Promise<any | null> {
+export async function getIndexFromGCS(url: string, logger?: Logger): Promise<any | null> {
     //   logger.info(`Getting f-engine document from GCS`, {
     //     url,
     //   });
@@ -70,15 +72,16 @@ export async function getIndexFromGCS(url: string): Promise<any | null> {
         const storage = new Storage({ credentials });
         const bucket = storage.bucket(process.env.GCS_INDEX_BUCKET_NAME);
         const blob = bucket.file(`${url}`);
-        const [exists] = await blob.exists();
-        if (!exists) {
-            return null;
-        }
         const [blobContent] = await blob.download();
         const parsed = JSON.parse(blobContent.toString());
         return parsed;
     } catch (error) {
-        logger.error(`Error getting f-engine document from GCS`, {
+        if (error instanceof ApiError && error.code === 404 && error.message.includes("No such object:")) {
+          // Object does not exist
+          return null;
+        }
+
+        (logger ?? _logger).error(`Error getting Index document from GCS`, {
             error,
             url,
         });
@@ -113,7 +116,7 @@ export async function saveIndexToGCS(id: string, doc: {
               if (i === 2) {
                   throw error;
               } else {
-                  logger.error(`Error saving index document to GCS, retrying`, {
+                  _logger.error(`Error saving index document to GCS, retrying`, {
                       error,
                       indexId: id,
                       i,
@@ -164,7 +167,7 @@ export function normalizeURLForIndex(url: string): string {
     return urlObj.toString();
 }
 
-export async function hashURL(url: string): Promise<string> {
+export function hashURL(url: string): string {
     return "\\x" + crypto.createHash("sha256").update(url).digest("hex");
 }
 
@@ -185,6 +188,25 @@ export function generateURLSplits(url: string): string[] {
   return [...new Set(urls.map(x => normalizeURLForIndex(x)))];
 }
 
+export function generateDomainSplits(hostname: string): string[] {
+  const parsed = psl.parse(hostname);
+  if (parsed === null) {
+    return [];
+  }
+
+  const subdomains: string[] = (parsed.subdomain ?? "").split(".").filter(x => x !== "");
+  if (subdomains.length === 1 && subdomains[0] === "www") {
+    return [parsed.domain];
+  }
+
+  const domains: string[] = [];
+  for (let i = subdomains.length; i >= 0; i--) {
+    domains.push(subdomains.slice(i).concat([parsed.domain]).join("."));
+  }
+
+  return domains;
+}
+
 const INDEX_INSERT_QUEUE_KEY = "index-insert-queue";
 const INDEX_INSERT_BATCH_SIZE = 1000;
 
@@ -202,12 +224,12 @@ export async function processIndexInsertJobs() {
   if (jobs.length === 0) {
     return;
   }
-  logger.info(`Index inserter found jobs to insert`, { jobCount: jobs.length });
+  _logger.info(`Index inserter found jobs to insert`, { jobCount: jobs.length });
   try {
     await index_supabase_service.from("index").insert(jobs);
-    logger.info(`Index inserter inserted jobs`, { jobCount: jobs.length });
+    _logger.info(`Index inserter inserted jobs`, { jobCount: jobs.length });
   } catch (error) {
-    logger.error(`Index inserter failed to insert jobs`, { error, jobCount: jobs.length });
+    _logger.error(`Index inserter failed to insert jobs`, { error, jobCount: jobs.length });
   }
 }
 
@@ -225,17 +247,90 @@ export async function queryIndexAtSplitLevel(url: string, limit: number): Promis
 
   const urlSplitsHash = generateURLSplits(urlObj.href).map(x => hashURL(x));
 
-  const { data, error } = await index_supabase_service
-      .from("index")
-      .select("resolved_url")
-      .eq("url_split_" + (urlSplitsHash.length - 1) + "_hash", urlSplitsHash[urlSplitsHash.length - 1])
-      .gte("created_at", new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString())
-      .limit(limit)
+  const level = urlSplitsHash.length - 1;
 
-  if (error) {
-    logger.warn("Error querying index", { error, url, limit });
+  let links: Set<string> = new Set();
+  let iteration = 0;
+
+  while (true) {
+    // Query the index for the next set of links
+    const { data: _data, error } = await index_supabase_service
+      .rpc("query_index_at_split_level", {
+        i_level: level,
+        i_url_hash: urlSplitsHash[level],
+        i_newer_than: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+      })
+      .range(iteration * 1000, (iteration + 1) * 1000)
+
+    // If there's an error, return the links we have
+    if (error) {
+      _logger.warn("Error querying index", { error, url, limit });
+      return [...links].slice(0, limit);
+    }
+
+    // Add the links to the set
+    const data = _data ?? [];
+    data.forEach((x) => links.add(x.resolved_url));
+
+    // If we have enough links, return them
+    if (links.size >= limit) {
+      return [...links].slice(0, limit);
+    }
+
+    // If we get less than 1000 links from the query, we're done
+    if (data.length < 1000) {
+      return [...links].slice(0, limit);
+    }
+
+    iteration++;
+  }
+}
+
+export async function queryIndexAtDomainSplitLevel(hostname: string, limit: number): Promise<string[]> {
+  if (!useIndex || process.env.FIRECRAWL_INDEX_WRITE_ONLY === "true") {
     return [];
   }
 
-  return [...new Set((data ?? []).map((x) => x.resolved_url))];
+  const domainSplitsHash = generateDomainSplits(hostname).map(x => hashURL(x));
+
+  const level = domainSplitsHash.length - 1;
+  if (domainSplitsHash.length === 0) {
+    return [];
+  }
+
+  let links: Set<string> = new Set();
+  let iteration = 0;
+
+  while (true) {
+    // Query the index for the next set of links
+    const { data: _data, error } = await index_supabase_service
+      .rpc("query_index_at_domain_split_level", {
+        i_level: level,
+        i_domain_hash: domainSplitsHash[level],
+        i_newer_than: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+      })
+      .range(iteration * 1000, (iteration + 1) * 1000)
+
+    // If there's an error, return the links we have
+    if (error) {
+      _logger.warn("Error querying index", { error, hostname, limit });
+      return [...links].slice(0, limit);
+    }
+
+    // Add the links to the set
+    const data = _data ?? [];
+    data.forEach((x) => links.add(x.resolved_url));
+
+    // If we have enough links, return them
+    if (links.size >= limit) {
+      return [...links].slice(0, limit);
+    }
+
+    // If we get less than 1000 links from the query, we're done
+    if (data.length < 1000) {
+      return [...links].slice(0, limit);
+    }
+
+    iteration++;
+  }
 }

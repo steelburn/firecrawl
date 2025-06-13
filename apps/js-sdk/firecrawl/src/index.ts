@@ -50,6 +50,9 @@ export interface FirecrawlDocumentMetadata {
   sourceURL?: string;
   statusCode?: number;
   error?: string;
+  proxyUsed?: "basic" | "stealth";
+  cacheState?: "miss" | "hit";
+  cachedAt?: string;
   [key: string]: any; // Allows for additional metadata properties not explicitly defined.
 }
 
@@ -121,6 +124,7 @@ export interface CrawlScrapeOptions {
   blockAds?: boolean;
   proxy?: "basic" | "stealth" | "auto";
   storeInCache?: boolean;
+  maxAge?: number;
 }
 
 export type Action = {
@@ -166,6 +170,7 @@ export interface ScrapeParams<LLMSchema extends zt.ZodSchema = any, ActionsSchem
     prompt?: string;
     schema?: any;
     modes?: ("json" | "git-diff")[];
+    tag?: string | null;
   }
   actions?: ActionsSchema;
   agent?: AgentOptions;
@@ -287,6 +292,7 @@ export interface MapParams {
   sitemapOnly?: boolean;
   limit?: number;
   timeout?: number;
+  useIndex?: boolean;
 }
 
 /**

@@ -10,6 +10,21 @@ import {
 } from "../../lib/entities";
 import { InternalOptions } from "../../scraper/scrapeURL";
 
+export enum IntegrationEnum {
+  DIFY = "dify",
+  ZAPIER = "zapier",
+  PIPEDREAM = "pipedream",
+  RAYCAST = "raycast",
+  LANGCHAIN = "langchain",
+  CREWAI = "crewai",
+  LLAMAINDEX = "llamaindex",
+  N8N = "n8n",
+  CAMELAI = "camelai",
+  MAKE = "make",
+  FLOWISE = "flowise",
+  METAGPT = "metagpt",
+}
+
 export type Format =
   | "markdown"
   | "html"
@@ -27,14 +42,15 @@ export const url = z.preprocess(
       x = `http://${x}`;
     }
     
-    try {
-      const urlObj = new URL(x as string);
-      if (urlObj.search) {
-        const searchParams = new URLSearchParams(urlObj.search.substring(1));
-        return `${urlObj.origin}${urlObj.pathname}?${searchParams.toString()}`;
-      }
-    } catch (e) {
-    }
+    // transforming the query parameters is breaking certain sites, so we're not doing it - mogery
+    // try {
+    //   const urlObj = new URL(x as string);
+    //   if (urlObj.search) {
+    //     const searchParams = new URLSearchParams(urlObj.search.substring(1));
+    //     return `${urlObj.origin}${urlObj.pathname}?${searchParams.toString()}`;
+    //   }
+    // } catch (e) {
+    // }
     
     return x;
   },
@@ -260,6 +276,7 @@ const baseScrapeOptions = z
         prompt: z.string().optional(),
         schema: z.any().optional(),
         modes: z.enum(["json", "git-diff"]).array().optional().default([]),
+        tag: z.string().or(z.null()).default(null),
       })
       .optional(),
     mobile: z.boolean().default(false),
@@ -469,6 +486,7 @@ export const extractV1Options = z
     enableWebSearch: z.boolean().default(false),
     scrapeOptions: baseScrapeOptions.default({ onlyMainContent: false }).optional(),
     origin: z.string().optional().default("api"),
+    integration: z.nativeEnum(IntegrationEnum).optional().transform(val => val || null),
     urlTrace: z.boolean().default(false),
     timeout: z.number().int().positive().finite().safe().default(60000),
     __experimental_streamSteps: z.boolean().default(false),
@@ -527,6 +545,7 @@ export const scrapeRequestSchema = baseScrapeOptions
     extract: extractOptionsWithAgent.optional(),
     jsonOptions: extractOptionsWithAgent.optional(),
     origin: z.string().optional().default("api"),
+    integration: z.nativeEnum(IntegrationEnum).optional().transform(val => val || null),
     timeout: z.number().int().positive().finite().safe().default(30000),
   })
   .strict(strictMessage)
@@ -561,6 +580,7 @@ export const batchScrapeRequestSchema = baseScrapeOptions
   .extend({
     urls: url.array(),
     origin: z.string().optional().default("api"),
+    integration: z.nativeEnum(IntegrationEnum).optional().transform(val => val || null),
     webhook: webhookSchema.optional(),
     appendToId: z.string().uuid().optional(),
     ignoreInvalidURLs: z.boolean().default(false),
@@ -574,6 +594,7 @@ export const batchScrapeRequestSchemaNoURLValidation = baseScrapeOptions
   .extend({
     urls: z.string().array(),
     origin: z.string().optional().default("api"),
+    integration: z.nativeEnum(IntegrationEnum).optional().transform(val => val || null),
     webhook: webhookSchema.optional(),
     appendToId: z.string().uuid().optional(),
     ignoreInvalidURLs: z.boolean().default(false),
@@ -621,6 +642,7 @@ export const crawlRequestSchema = crawlerOptions
   .extend({
     url,
     origin: z.string().optional().default("api"),
+    integration: z.nativeEnum(IntegrationEnum).optional().transform(val => val || null),
     scrapeOptions: baseScrapeOptions.default({}),
     webhook: webhookSchema.optional(),
     limit: z.number().default(10000),
@@ -652,6 +674,7 @@ export const mapRequestSchema = crawlerOptions
   .extend({
     url,
     origin: z.string().optional().default("api"),
+    integration: z.nativeEnum(IntegrationEnum).optional().transform(val => val || null),
     includeSubdomains: z.boolean().default(true),
     search: z.string().optional(),
     ignoreSitemap: z.boolean().default(false),
@@ -1203,6 +1226,7 @@ export const searchRequestSchema = z
     country: z.string().optional().default("us"),
     location: z.string().optional(),
     origin: z.string().optional().default("api"),
+    integration: z.nativeEnum(IntegrationEnum).optional().transform(val => val || null),
     timeout: z.number().int().positive().finite().safe().default(60000),
     ignoreInvalidURLs: z.boolean().optional().default(false),
     __searchPreviewToken: z.string().optional(),

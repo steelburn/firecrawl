@@ -19,6 +19,7 @@ import { shouldSendConcurrencyLimitNotification } from './notification/notificat
 import { getACUC, getACUCTeam } from "../controllers/auth";
 import { getJobFromGCS } from "../lib/gcs-jobs";
 import { Document } from "../controllers/v1/types";
+import type { Logger } from "winston";
 
 /**
  * Checks if a job is a crawl or batch scrape based on its options
@@ -372,7 +373,6 @@ export function waitForJob(
 
           resolve(doc);
         } else if (state === "failed") {
-          // console.log("failed", (await getScrapeQueue().getJob(jobId)).failedReason);
           const job = await getScrapeQueue().getJob(jobId);
           if (job && job.failedReason !== "Concurrency limit hit") {
             clearInterval(int);

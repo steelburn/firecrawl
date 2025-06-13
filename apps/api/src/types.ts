@@ -44,6 +44,7 @@ export interface WebScraperOptions {
   sitemapped?: boolean;
   webhook?: z.infer<typeof webhookSchema>;
   v1?: boolean;
+  integration?: string | null;
 
   /**
    * Disables billing on the worker side.
@@ -94,6 +95,7 @@ export interface FirecrawlJob {
   crawlerOptions?: any;
   scrapeOptions?: any;
   origin: string;
+  integration?: string | null;
   num_tokens?: number;
   retry?: boolean;
   crawl_id?: string;
@@ -102,6 +104,7 @@ export interface FirecrawlJob {
   cost_tracking?: CostTracking;
   pdf_num_pages?: number;
   credits_billed?: number | null;
+  change_tracking_tag?: string | null;
 }
 
 export interface FirecrawlScrapeResponse {

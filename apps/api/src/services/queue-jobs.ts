@@ -86,7 +86,12 @@ export async function _addScrapeJobToBullMQ(
     }
   }
 
-  return await scrapeQueue.addJob(jobId, webScraperOptions, priority, listenable);
+  return await scrapeQueue.addJob(
+    jobId,
+    webScraperOptions,
+    priority,
+    listenable,
+  );
 }
 
 async function addScrapeJobRaw(
@@ -95,6 +100,7 @@ async function addScrapeJobRaw(
   priority: number = 0,
   directToBullMQ: boolean = false,
   listenable: boolean = false,
+  logger: Logger = _logger,
 ): Promise<NuQJob<ScrapeJobData> | null> {
   let concurrencyLimited: "yes" | "yes-crawl" | "no" | null = null;
   let currentActiveConcurrency = 0;
@@ -102,9 +108,11 @@ async function addScrapeJobRaw(
 
   if (directToBullMQ) {
     concurrencyLimited = "no";
+    logger.debug("Adding job directly to BullMQ");
   } else {
     if (webScraperOptions.crawl_id) {
       const crawl = await getCrawl(webScraperOptions.crawl_id);
+      logger.debug("Got crawl");
       const concurrencyLimit = !crawl
         ? null
         : crawl.crawlerOptions?.delay === undefined &&
@@ -116,6 +124,7 @@ async function addScrapeJobRaw(
         const crawlConcurrency = (
           await getCrawlConcurrencyLimitActiveJobs(webScraperOptions.crawl_id)
         ).length;
+        logger.debug("Got crawl concurrency limit active jobs");
         const freeSlots = Math.max(concurrencyLimit - crawlConcurrency, 0);
         if (freeSlots === 0) {
           concurrencyLimited = "yes-crawl";
@@ -137,10 +146,13 @@ async function addScrapeJobRaw(
               : RateLimiterMode.Crawl,
           )
         )?.concurrency ?? 2;
+      logger.debug("Got team ACUC concurrency limit");
       await cleanOldConcurrencyLimitEntries(webScraperOptions.team_id, now);
+      logger.debug("Cleaned old concurrency limit entries");
       const currentActiveConcurrency = (
         await getConcurrencyLimitActiveJobs(webScraperOptions.team_id, now)
       ).length;
+      logger.debug("Got current active concurrency");
       concurrencyLimited =
         currentActiveConcurrency >= maxConcurrency ? "yes" : "no";
     }
@@ -154,6 +166,7 @@ async function addScrapeJobRaw(
       const concurrencyQueueJobs = await getConcurrencyQueueJobsCount(
         webScraperOptions.team_id,
       );
+      logger.debug("Got concurrency queue jobs");
       if (concurrencyQueueJobs > maxConcurrency) {
         // logger.info("Concurrency limited 2x (single) - ", "Concurrency queue jobs: ", concurrencyQueueJobs, "Max concurrency: ", maxConcurrency, "Team ID: ", webScraperOptions.team_id);
 
@@ -162,6 +175,7 @@ async function addScrapeJobRaw(
           await shouldSendConcurrencyLimitNotification(
             webScraperOptions.team_id,
           );
+        logger.debug("Got should send notification");
         if (shouldSendNotification) {
           sendNotificationWithCustomDays(
             webScraperOptions.team_id,
@@ -181,10 +195,23 @@ async function addScrapeJobRaw(
 
     webScraperOptions.concurrencyLimited = true;
 
-    await _addScrapeJobToConcurrencyQueue(webScraperOptions, jobId, priority, listenable);
+    await _addScrapeJobToConcurrencyQueue(
+      webScraperOptions,
+      jobId,
+      priority,
+      listenable,
+    );
+    logger.debug("Added job to concurrency queue");
     return null;
   } else {
-    return await _addScrapeJobToBullMQ(webScraperOptions, jobId, priority, listenable);
+    const x = await _addScrapeJobToBullMQ(
+      webScraperOptions,
+      jobId,
+      priority,
+      listenable,
+    );
+    logger.debug("Added job to BullMQ");
+    return x;
   }
 }
 
@@ -194,6 +221,9 @@ export async function addScrapeJob(
   priority: number = 0,
   directToBullMQ: boolean = false,
   listenable: boolean = false,
+  logger: Logger = _logger.child({
+    zeroDataRetention: !!webScraperOptions.zeroDataRetention,
+  }),
 ): Promise<NuQJob<ScrapeJobData> | null> {
   // Capture trace context to propagate to worker
   const traceContext = serializeTraceContext();
@@ -208,6 +238,7 @@ export async function addScrapeJob(
     priority,
     directToBullMQ,
     listenable,
+    logger,
   );
 }
 

@@ -1,7 +1,5 @@
 import { configDotenv } from "dotenv";
 import { config } from "../../config";
-import * as Sentry from "@sentry/node";
-import { applyZdrScope, captureExceptionWithZdrCheck } from "../sentry";
 import http from "http";
 import https from "https";
 
@@ -93,6 +91,7 @@ import { scrapeSitemap } from "../../scraper/crawler/sitemap";
 import {
   withTraceContextAsync,
   withSpan,
+  withZeroDataRetention,
   setSpanAttributes,
 } from "../../lib/otel-tracer";
 import { ScrapeUrlResponse } from "../../scraper/scrapeURL";
@@ -303,9 +302,6 @@ async function billScrapeJob(
             status: "void",
           });
         }
-        captureExceptionWithZdrCheck(error, {
-          extra: { zeroDataRetention: job.data.zeroDataRetention ?? false },
-        });
         return creditsToBeBilled;
       }
     }
@@ -363,7 +359,6 @@ async function processJob(job: NuQJob<ScrapeJobSingleUrls>) {
     teamId: job.data?.team_id ?? undefined,
     zeroDataRetention: job.data?.zeroDataRetention ?? false,
   });
-  applyZdrScope(job.data?.zeroDataRetention);
   logger.info(`🐂 Worker taking job ${job.id}`, { url: job.data.url });
   const start = job.data.startTime ?? Date.now();
   const remainingTime = job.data.scrapeOptions.timeout
@@ -994,16 +989,6 @@ async function processJob(job: NuQJob<ScrapeJobSingleUrls>) {
       logger.warn(`🐂 Job got cancelled, silently failing`);
     } else {
       logger.error(`🐂 Job errored ${job.id} - ${error}`, { error });
-
-      // Filter out TransportableErrors (flow control)
-      if (!(error instanceof TransportableError)) {
-        captureExceptionWithZdrCheck(error, {
-          data: {
-            job: job.id,
-          },
-          extra: { zeroDataRetention: job.data.zeroDataRetention ?? false },
-        });
-      }
 
       if (error instanceof CustomError) {
         // Here we handle the error, then save the failed job
@@ -1662,8 +1647,13 @@ export const processJobInternal = async (job: NuQJob<ScrapeJobData>) => {
     zeroDataRetention: job.data?.zeroDataRetention ?? false,
   });
 
-  // Restore trace context if available and execute within span
-  if (job.data.traceContext) {
+  // Restore trace context if available and execute within span. The ZDR
+  // context is applied either way so nothing below records for ZDR jobs.
+  return withZeroDataRetention(job.data.zeroDataRetention === true, () => {
+    if (!job.data.traceContext) {
+      return processJobWithTracing(job, logger);
+    }
+
     return withTraceContextAsync(job.data.traceContext, () =>
       withSpan("worker.scrape.process", async span => {
         setSpanAttributes(span, {
@@ -1677,9 +1667,7 @@ export const processJobInternal = async (job: NuQJob<ScrapeJobData>) => {
         return processJobWithTracing(job, logger);
       }),
     );
-  } else {
-    return processJobWithTracing(job, logger);
-  }
+  });
 };
 
 async function processJobWithTracing(job: NuQJob<ScrapeJobData>, logger: any) {
@@ -1766,20 +1754,6 @@ async function processJobWithTracing(job: NuQJob<ScrapeJobData>, logger: any) {
     }
   } catch (error) {
     logger.warn("Job failed", { error });
-
-    // Filter out expected errors (flow control, not real errors)
-    if (
-      error instanceof TransportableError ||
-      error instanceof JobCancelledError ||
-      error instanceof RacedRedirectError ||
-      error instanceof ScrapeJobTimeoutError
-    ) {
-      // These are expected flow control errors, don't send to Sentry
-    } else {
-      captureExceptionWithZdrCheck(error, {
-        extra: { zeroDataRetention: job.data.zeroDataRetention ?? false },
-      });
-    }
 
     if (job.data.skipNuq) {
       throw error;

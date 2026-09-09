@@ -1,7 +1,6 @@
 import "dotenv/config";
 import { config } from "../../config";
-import "../sentry";
-import { setSentryServiceTag } from "../sentry";
+import { shutdownTracing } from "../../otel";
 import { logger as _logger } from "../../lib/logger";
 import { reconcileConcurrencyQueue } from "../../lib/concurrency-queue-reconciler";
 import { repairCrawlJobDoneMarkers } from "../../lib/crawl-redis";
@@ -26,8 +25,6 @@ const reconcilerJobsRecoveredTotal = new Counter({
 });
 
 (async () => {
-  setSentryServiceTag("nuq-reconciler-worker");
-
   let isShuttingDown = false;
   let reconcilerInFlight = false;
 
@@ -72,7 +69,8 @@ const reconcilerJobsRecoveredTotal = new Counter({
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    server.close(() => {
+    server.close(async () => {
+      await shutdownTracing();
       _logger.info("NuQ reconciler worker shut down");
       process.exit(0);
     });

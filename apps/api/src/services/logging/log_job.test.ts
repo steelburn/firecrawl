@@ -4,7 +4,6 @@ import { vi } from "vitest";
 // vi.hoisted() (also hoisted). Under Jest these worked because importing `jest`
 // from @jest/globals disables jest.mock hoisting.
 const {
-  captureException,
   logger,
   values,
   insert,
@@ -38,7 +37,6 @@ const {
     };
   });
   return {
-    captureException: vi.fn(),
     logger,
     values,
     insert,
@@ -56,10 +54,6 @@ vi.mock("@google-cloud/pubsub", () => ({
     topic = topic;
     close = close;
   },
-}));
-
-vi.mock("@sentry/node", () => ({
-  captureException,
 }));
 
 vi.mock("../../config", () => ({
@@ -177,28 +171,6 @@ describe("logSearch", () => {
     expect(search.options.query).toBe("nested\u0000query");
   });
 
-  it("uses sanitized data in Sentry insert failure context", async () => {
-    values.mockRejectedValueOnce(
-      Object.assign(new Error("unsupported Unicode escape sequence"), {
-        code: "22P05",
-      }),
-    );
-
-    await logSearch(
-      makeSearch({
-        query: "bad\u0000query",
-        options: { query: "bad\u0000query" },
-      }),
-    );
-
-    expect(captureException).toHaveBeenCalled();
-    const context = captureException.mock.calls[0][1] as {
-      extra: { data: string };
-    };
-    expect(context.extra.data).not.toContain("\\u0000");
-    expect(context.extra.data).toContain("badquery");
-  });
-
   it("reports serialization failures without losing the PostgreSQL attempt", async () => {
     const search = makeSearch({ options: { unsupported: 1n } });
 
@@ -286,7 +258,6 @@ describe("logRequest", () => {
       "Failed to publish log to Pub/Sub",
       expect.objectContaining({ error: expect.any(Error) }),
     );
-    expect(captureException).toHaveBeenCalled();
   });
 
   it("does not hold the caller on a slow publish", async () => {

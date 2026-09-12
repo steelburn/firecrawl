@@ -1116,6 +1116,7 @@ const scrapeRequestSchemaBase = baseScrapeOptions.extend({
   origin: z.string().optional().prefault("api"),
   integration: integrationSchema.optional().transform(val => val || null),
   zeroDataRetention: z.boolean().optional(),
+  domainTools: z.boolean().optional(),
   __agentInterop: z
     .object({
       auth: z.string(),
@@ -1538,7 +1539,9 @@ export type ScrapeResponse =
   | {
       success: true;
       warning?: string;
-      data: Document;
+      data: Document & {
+        tools?: import("../../services/alexandria/contracts").DiscoveredTool[];
+      };
       scrape_id?: string;
     };
 
@@ -1888,6 +1891,7 @@ type Account = {
 };
 
 export type TeamFlags = {
+  exchangeRetrieve?: boolean;
   ignoreRobots?: "disabled" | "allowed" | "forced";
   customRobotsAgent?: "disabled" | "allowed";
   threatProtection?: "disabled" | "allowed" | "forced";
@@ -2323,13 +2327,16 @@ export const searchRequestSchema = z
     sources: z
       .union([
         // Array of strings (simple format)
-        z.array(z.enum(["web", "images", "news"])),
+        z.array(z.enum(["web", "images", "news", "alexandria"])),
         // Array of objects (advanced format)
         z.array(
           z.union([
             webSearchSourceOptions,
             imagesSearchSourceOptions,
             newsSearchSourceOptions,
+            z.strictObject({
+              type: z.literal("alexandria"),
+            }),
           ]),
         ),
       ])
@@ -2367,6 +2374,7 @@ export const searchRequestSchema = z
     // our index. When omitted, the caller integration and rollout cohort decide
     // whether generated highlights are returned or only run in shadow mode.
     highlights: z.boolean().optional(),
+    domainTools: z.boolean().optional(),
     __searchPreviewToken: z.string().optional(),
     threatProtection: threatProtectionOverrideSchema.optional(),
     scrapeOptions: baseScrapeOptions

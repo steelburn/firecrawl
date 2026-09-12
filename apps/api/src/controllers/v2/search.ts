@@ -37,6 +37,7 @@ import {
 import { projectSearchTotalCredits } from "../../lib/keyless-credit-projection";
 import { applyAgentAuthDiscoveryHeader } from "../../lib/agent-auth-discovery";
 import { resolveThreatProtection } from "../../lib/threat-protection/request";
+import { isToolsOnlySearch } from "../../search/alexandria";
 import {
   actionTypesOf,
   checkKeyEndpointRestriction,
@@ -128,6 +129,27 @@ async function searchControllerInner(
     const rawOrigin =
       typeof req.body?.origin === "string" ? req.body.origin : undefined;
     req.body = searchRequestSchema.parse(req.body);
+
+    const wantsTools = req.body.sources.some(
+      source => source.type === "alexandria",
+    );
+    if (wantsTools && !req.body.query.trim())
+      return res.status(400).json({
+        success: false,
+        error: "A query is required for tool search.",
+      });
+    if (
+      (wantsTools || req.body.domainTools) &&
+      (!req.acuc?.flags?.exchangeRetrieve ||
+        teamForcedKind ||
+        req.body.enterprise?.some(mode => mode === "zdr" || mode === "anon"))
+    )
+      return res.status(403).json({
+        success: false,
+        error: !req.acuc?.flags?.exchangeRetrieve
+          ? "The alexandria source is not enabled for this team."
+          : "Provider discovery requires access and does not support zero data retention.",
+      });
 
     const requestedFormats = formatTypesOf(req.body.scrapeOptions?.formats);
     const keyRestriction = await checkKeyFormatRestriction(
@@ -252,8 +274,9 @@ async function searchControllerInner(
       });
     }
 
+    const toolsOnly = isToolsOnlySearch(req.body.sources, req.body.categories);
     const projectedKeylessCredits =
-      !isSearchPreview && shouldBill
+      !isSearchPreview && shouldBill && !toolsOnly
         ? projectSearchTotalCredits(
             {
               limit: req.body.limit,
@@ -295,6 +318,7 @@ async function searchControllerInner(
         enterprise: req.body.enterprise,
         scrapeOptions: req.body.scrapeOptions,
         highlights: req.body.highlights,
+        domainTools: req.body.domainTools,
         timeout: req.body.timeout,
       },
       {
@@ -430,6 +454,7 @@ async function searchControllerInner(
       data: result.response,
       creditsUsed: result.totalCredits,
       id: jobId,
+      ...(result.toolsWarning ? { warning: result.toolsWarning } : {}),
     });
   } catch (error) {
     if (reservedKeylessCredits > 0 && !reconciledKeylessCredits) {
